@@ -73,6 +73,10 @@ if "mis_tickers" not in st.session_state:
 if "buscador" not in st.session_state:
     st.session_state.buscador = ""
 
+# Memoria para el tramo de impuestos
+if "tasa_impuesto" not in st.session_state:
+    st.session_state.tasa_impuesto = 0.0
+
 for t in st.session_state.mis_tickers:
     if t not in st.session_state.nombres_tickers:
         r = buscar_multiples_tickers(t)
@@ -94,7 +98,7 @@ def accion_limpiar():
     st.session_state.buscador = ""
 
 # ==========================================
-# 🧠 CÁLCULO DE LIBRO MAYOR (LEDGER)
+# 🧠 CÁLCULO DE LIBRO MAYOR (MÉTODO FIFO - SII)
 # ==========================================
 tx_data = obtener_transacciones()
 df_tx = pd.DataFrame(tx_data)
@@ -106,55 +110,77 @@ if not df_tx.empty:
         df_t = df_tx[df_tx['ticker'] == ticker].copy()
         df_t = df_t.sort_values('fecha') 
         
-        cuotas = 0.0
-        costo_total = 0.0
-        ganancia_cobrada = 0.0
+        lote_compras = [] # Cola para método FIFO
+        ganancia_cobrada_fifo = 0.0
         
         for _, row in df_t.iterrows():
             cant = float(row['cantidad'])
             precio = float(row['precio_usd'])
             
             if row['tipo'] == 'COMPRA':
-                cuotas += cant
-                costo_total += cant * precio
+                lote_compras.append({'qty': cant, 'price': precio})
             elif row['tipo'] == 'VENTA':
-                precio_promedio_actual = costo_total / cuotas if cuotas > 0 else 0
-                cuotas -= cant
-                # Evitar cuotas negativas por errores de tipeo
-                if cuotas < 0: cuotas = 0 
-                costo_total -= cant * precio_promedio_actual
-                ganancia_cobrada += (precio - precio_promedio_actual) * cant
-                
-        precio_medio_final = costo_total / cuotas if cuotas > 0 else 0.0
+                cant_a_vender = cant
+                # Lógica FIFO: Vende las acciones más antiguas primero
+                while cant_a_vender > 0 and lote_compras:
+                    compra_mas_antigua = lote_compras[0]
+                    if compra_mas_antigua['qty'] <= cant_a_vender:
+                        # Se vende todo este lote antiguo
+                        ganancia_cobrada_fifo += compra_mas_antigua['qty'] * (precio - compra_mas_antigua['price'])
+                        cant_a_vender -= compra_mas_antigua['qty']
+                        lote_compras.pop(0)
+                    else:
+                        # Se vende solo una parte de este lote
+                        ganancia_cobrada_fifo += cant_a_vender * (precio - compra_mas_antigua['price'])
+                        compra_mas_antigua['qty'] -= cant_a_vender
+                        cant_a_vender = 0
+
+        # Calculamos lo que nos queda activo hoy
+        cuotas_restantes = sum(lote['qty'] for lote in lote_compras)
+        costo_total_restante = sum(lote['qty'] * lote['price'] for lote in lote_compras)
+        precio_medio_final = costo_total_restante / cuotas_restantes if cuotas_restantes > 0 else 0.0
         
         mis_posiciones[ticker] = {
-            'cuotas': cuotas,
+            'cuotas': cuotas_restantes,
             'precio_medio': precio_medio_final,
-            'ganancia_realizada': ganancia_cobrada
+            'ganancia_realizada': ganancia_cobrada_fifo
         }
-        ganancia_realizada_total += ganancia_cobrada
+        ganancia_realizada_total += ganancia_cobrada_fifo
 
 # ==========================================
-# MENÚ LATERAL: TERMINAL DE OPERACIONES 💼
+# MENÚ LATERAL: TERMINAL DE OPERACIONES Y SII 💼
 # ==========================================
 with st.sidebar:
-    st.title("💼 Terminal de Operaciones")
-    st.markdown("Registra tus compras y ventas. La base de datos calculará tu precio promedio y ganancias al instante.")
+    st.title("💼 Mi Terminal")
     
-    with st.form("form_transaccion"):
-        st.subheader("Nueva Transacción")
-        t_ticker = st.selectbox("Acción / ETF:", st.session_state.mis_tickers)
-        t_tipo = st.radio("Tipo de Movimiento:", ["COMPRA", "VENTA"], horizontal=True)
-        t_cant = st.number_input("Cantidad de cuotas:", min_value=0.001, step=0.1, format="%.3f")
-        t_precio = st.number_input("Precio por cuota ($ USD):", min_value=0.01, step=1.0)
-        
-        submit_btn = st.form_submit_button("💾 Guardar en Base de Datos")
-        
-        if submit_btn:
-            registrar_transaccion(t_ticker, t_tipo, t_cant, t_precio)
-            st.success(f"✅ {t_tipo} registrada con éxito.")
-            time.sleep(1.5)
-            st.rerun()
+    with st.expander("📝 Registrar Movimiento", expanded=True):
+        with st.form("form_transaccion"):
+            t_ticker = st.selectbox("Acción / ETF:", st.session_state.mis_tickers)
+            t_tipo = st.radio("Tipo:", ["COMPRA", "VENTA"], horizontal=True)
+            t_cant = st.number_input("Cuotas:", min_value=0.001, step=0.1, format="%.3f")
+            t_precio = st.number_input("Precio ($ USD):", min_value=0.01, step=1.0)
+            
+            submit_btn = st.form_submit_button("💾 Guardar")
+            if submit_btn:
+                registrar_transaccion(t_ticker, t_tipo, t_cant, t_precio)
+                st.success(f"✅ {t_tipo} registrada.")
+                time.sleep(1)
+                st.rerun()
+
+    with st.expander("⚙️ Configuración SII (Chile)"):
+        st.markdown("Selecciona tu sueldo líquido mensual aproximado para calcular tu tramo de **Impuesto Global Complementario**:")
+        tramos_sii = {
+            "Exento (Menos de $850.000)": 0.0,
+            "Tramo 1 ($850k a $1.9M)": 4.0,
+            "Tramo 2 ($1.9M a $3.2M)": 8.0,
+            "Tramo 3 ($3.2M a $4.5M)": 13.5,
+            "Tramo 4 ($4.5M a $5.7M)": 23.0,
+            "Tramo 5 ($5.7M a $7.6M)": 30.4,
+            "Tramo 6 (Más de $7.6M)": 35.0
+        }
+        seleccion_tramo = st.selectbox("Mi sueldo:", list(tramos_sii.keys()))
+        st.session_state.tasa_impuesto = tramos_sii[seleccion_tramo]
+        st.caption(f"Tasa marginal a aplicar en tus ventas: **{st.session_state.tasa_impuesto}%**")
 
 # ==========================================
 # 🧠 FASE 2: EL ANALISTA FUNDAMENTAL 
@@ -217,12 +243,6 @@ with col_tiempo:
     seleccion = st.selectbox("⏳ Período global:", list(opciones_tiempo.keys()))
     config = opciones_tiempo[seleccion]
 
-if len(st.session_state.mis_tickers) > 1:
-    if st.button("🗑️ Limpiar todo y dejar solo el primero"):
-        st.session_state.mis_tickers = [st.session_state.mis_tickers[0]]
-        sincronizar_url() 
-        st.rerun()
-
 st.divider()
 
 # ==========================================
@@ -273,7 +293,7 @@ for ticker in st.session_state.mis_tickers:
         }
 
 # ==========================================
-# RESUMEN DE PATRIMONIO HISTÓRICO TOTAL 🏦
+# RESUMEN DE PATRIMONIO E IMPUESTOS 🏦🏛️
 # ==========================================
 total_invertido = 0.0
 total_actual = 0.0
@@ -291,22 +311,31 @@ for ticker in st.session_state.mis_tickers:
 ganancia_flotante_usd = total_actual - total_invertido
 desempeño_historico_total = ganancia_flotante_usd + ganancia_realizada_total
 
+# Cálculo de Provisión SII
+provision_sii_usd = 0.0
+if ganancia_realizada_total > 0:
+    provision_sii_usd = ganancia_realizada_total * (st.session_state.tasa_impuesto / 100)
+
+ganancia_neta_bolsillo = ganancia_realizada_total - provision_sii_usd
+
 if total_invertido > 0 or ganancia_realizada_total != 0:
-    st.subheader("🏦 Mi Patrimonio Histórico (USD)")
-    col1, col2, col3, col4 = st.columns(4)
+    st.subheader("🏦 Mi Patrimonio Histórico y Tributario (USD)")
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     col1.metric("💰 Inversión Activa", f"${total_invertido:,.2f}")
     col2.metric("💵 Valor Actual", f"${total_actual:,.2f}", f"{ganancia_flotante_usd:,.2f} Flotante")
     
     if ganancia_realizada_total >= 0:
-        col3.metric("💼 Ganancia Ya Cobrada", f"+${ganancia_realizada_total:,.2f}", "Caja")
+        col3.metric("💼 Ganancia Bruta Cobrada", f"+${ganancia_realizada_total:,.2f}")
     else:
-        col3.metric("💼 Pérdida Ya Cobrada", f"${ganancia_realizada_total:,.2f}", "Caja")
+        col3.metric("💼 Pérdida Cobrada", f"${ganancia_realizada_total:,.2f}")
         
+    col4.metric("🏛️ Provisión SII (Reserva)", f"-${provision_sii_usd:,.2f}", f"{st.session_state.tasa_impuesto}%")
+    
     if desempeño_historico_total >= 0:
-        col4.metric("🏆 Desempeño Histórico Total", f"+${desempeño_historico_total:,.2f}")
+        col5.metric("🏆 Desempeño Total Neto", f"+${desempeño_historico_total - provision_sii_usd:,.2f}", "Después de Impuestos")
     else:
-        col4.metric("📉 Desempeño Histórico Total", f"${desempeño_historico_total:,.2f}")
+        col5.metric("📉 Desempeño Total Neto", f"${desempeño_historico_total:,.2f}")
         
     st.divider()
 
