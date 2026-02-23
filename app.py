@@ -4,9 +4,36 @@ import plotly.graph_objects as go
 import pandas as pd 
 import time  
 import requests 
+from supabase import create_client, Client
 
 # 1. MODO PANTALLA COMPLETA
 st.set_page_config(page_title="Mi Portafolio", layout="wide", initial_sidebar_state="expanded")
+
+# ==========================================
+# CONEXIÓN A BASE DE DATOS SUPABASE 🗄️
+# ==========================================
+@st.cache_resource
+def init_connection():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase = init_connection()
+
+def obtener_transacciones():
+    try:
+        respuesta = supabase.table("transacciones").select("*").execute()
+        return respuesta.data
+    except:
+        return []
+
+def registrar_transaccion(ticker, tipo, cantidad, precio):
+    supabase.table("transacciones").insert({
+        "ticker": ticker,
+        "tipo": tipo,
+        "cantidad": cantidad,
+        "precio_usd": precio
+    }).execute()
 
 # ==========================================
 # MOTOR DE BÚSQUEDA INTELIGENTE
@@ -46,31 +73,20 @@ if "mis_tickers" not in st.session_state:
 if "buscador" not in st.session_state:
     st.session_state.buscador = ""
 
-# ¡NUEVO! Memoria para tus compras (Fase 1.5)
-if "mis_compras" not in st.session_state:
-    st.session_state.mis_compras = {}
-
 for t in st.session_state.mis_tickers:
     if t not in st.session_state.nombres_tickers:
         r = buscar_multiples_tickers(t)
         st.session_state.nombres_tickers[t] = r[0]["name"] if r else t
-    # Inicializamos en 0 las acciones nuevas para que no den error
-    if t not in st.session_state.mis_compras:
-        st.session_state.mis_compras[t] = {"cuotas": 0.0, "precio_medio": 0.0}
 
 def sincronizar_url():
     st.query_params["q_tickers"] = ",".join(st.session_state.mis_tickers)
 
 sincronizar_url()
 
-# ==========================================
-# FUNCIONES CALLBACK
-# ==========================================
 def accion_agregar(ticker_real, nombre_real):
     if ticker_real not in st.session_state.mis_tickers:
         st.session_state.mis_tickers.append(ticker_real)
         st.session_state.nombres_tickers[ticker_real] = nombre_real
-        st.session_state.mis_compras[ticker_real] = {"cuotas": 0.0, "precio_medio": 0.0}
         sincronizar_url() 
     st.session_state.buscador = ""
 
@@ -78,26 +94,95 @@ def accion_limpiar():
     st.session_state.buscador = ""
 
 # ==========================================
-# MENÚ LATERAL: GESTOR DE COMPRAS 💼
+# 🧠 CÁLCULO DE LIBRO MAYOR (LEDGER)
+# ==========================================
+tx_data = obtener_transacciones()
+df_tx = pd.DataFrame(tx_data)
+mis_posiciones = {}
+ganancia_realizada_total = 0.0
+
+if not df_tx.empty:
+    for ticker in df_tx['ticker'].unique():
+        df_t = df_tx[df_tx['ticker'] == ticker].copy()
+        df_t = df_t.sort_values('fecha') 
+        
+        cuotas = 0.0
+        costo_total = 0.0
+        ganancia_cobrada = 0.0
+        
+        for _, row in df_t.iterrows():
+            cant = float(row['cantidad'])
+            precio = float(row['precio_usd'])
+            
+            if row['tipo'] == 'COMPRA':
+                cuotas += cant
+                costo_total += cant * precio
+            elif row['tipo'] == 'VENTA':
+                precio_promedio_actual = costo_total / cuotas if cuotas > 0 else 0
+                cuotas -= cant
+                # Evitar cuotas negativas por errores de tipeo
+                if cuotas < 0: cuotas = 0 
+                costo_total -= cant * precio_promedio_actual
+                ganancia_cobrada += (precio - precio_promedio_actual) * cant
+                
+        precio_medio_final = costo_total / cuotas if cuotas > 0 else 0.0
+        
+        mis_posiciones[ticker] = {
+            'cuotas': cuotas,
+            'precio_medio': precio_medio_final,
+            'ganancia_realizada': ganancia_cobrada
+        }
+        ganancia_realizada_total += ganancia_cobrada
+
+# ==========================================
+# MENÚ LATERAL: TERMINAL DE OPERACIONES 💼
 # ==========================================
 with st.sidebar:
-    st.title("💼 Mi Billetera")
-    st.markdown("Ingresa tus datos de Fintual. Si no tienes plata en una acción, déjala en 0 (Modo Sapeo 👀).")
+    st.title("💼 Terminal de Operaciones")
+    st.markdown("Registra tus compras y ventas. La base de datos calculará tu precio promedio y ganancias al instante.")
     
-    for ticker in st.session_state.mis_tickers:
-        nombre_empresa = st.session_state.nombres_tickers.get(ticker, ticker)
-        with st.expander(f"💰 {nombre_empresa} ({ticker})", expanded=False):
-            # Recuperamos los valores actuales
-            c_actual = st.session_state.mis_compras[ticker]["cuotas"]
-            p_actual = st.session_state.mis_compras[ticker]["precio_medio"]
-            
-            # Inputs
-            nuevas_cuotas = st.number_input("Cantidad de Cuotas:", min_value=0.0, value=float(c_actual), step=0.1, key=f"c_{ticker}")
-            nuevo_precio = st.number_input("Precio Promedio ($ USD):", min_value=0.0, value=float(p_actual), step=1.0, key=f"p_{ticker}")
-            
-            # Guardamos
-            st.session_state.mis_compras[ticker]["cuotas"] = nuevas_cuotas
-            st.session_state.mis_compras[ticker]["precio_medio"] = nuevo_precio
+    with st.form("form_transaccion"):
+        st.subheader("Nueva Transacción")
+        t_ticker = st.selectbox("Acción / ETF:", st.session_state.mis_tickers)
+        t_tipo = st.radio("Tipo de Movimiento:", ["COMPRA", "VENTA"], horizontal=True)
+        t_cant = st.number_input("Cantidad de cuotas:", min_value=0.001, step=0.1, format="%.3f")
+        t_precio = st.number_input("Precio por cuota ($ USD):", min_value=0.01, step=1.0)
+        
+        submit_btn = st.form_submit_button("💾 Guardar en Base de Datos")
+        
+        if submit_btn:
+            registrar_transaccion(t_ticker, t_tipo, t_cant, t_precio)
+            st.success(f"✅ {t_tipo} registrada con éxito.")
+            time.sleep(1.5)
+            st.rerun()
+
+# ==========================================
+# 🧠 FASE 2: EL ANALISTA FUNDAMENTAL 
+# ==========================================
+@st.cache_data(ttl=3600) 
+def obtener_fundamentales(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+        pe = info.get('trailingPE', info.get('forwardPE', None))
+        margen = info.get('profitMargins', None)
+        deuda_equity = info.get('debtToEquity', None)
+        
+        if margen is None:
+            return "⚪ **Fundamental:** Es un ETF/Fondo (No aplica)."
+        
+        margen_pct = margen * 100
+        
+        if margen_pct < 0:
+            return f"🔴 **RIESGO (Fundamental):** Empresa perdiendo plata (Margen: {margen_pct:.1f}%)."
+        elif pe is not None and pe > 40:
+            return f"🟡 **REGULAR (Fundamental):** Gana plata pero la acción está cara (P/E: {pe:.1f})."
+        elif deuda_equity is not None and deuda_equity > 150:
+            return f"🟡 **REGULAR (Fundamental):** Alta deuda (D/E: {deuda_equity:.0f}), aunque genere ganancias."
+        else:
+            texto_pe = f"P/E: {pe:.1f}" if pe else "P/E: N/A"
+            return f"🟢 **SÓLIDA (Fundamental):** Negocio sano ({texto_pe}, Margen: {margen_pct:.1f}%)."
+    except:
+        return "⚪ **Fundamental:** Datos no disponibles en la bolsa."
 
 # ==========================================
 # INTERFAZ PRINCIPAL
@@ -188,36 +273,41 @@ for ticker in st.session_state.mis_tickers:
         }
 
 # ==========================================
-# ¡NUEVO! RESUMEN DE PATRIMONIO TOTAL 🏦
+# RESUMEN DE PATRIMONIO HISTÓRICO TOTAL 🏦
 # ==========================================
 total_invertido = 0.0
 total_actual = 0.0
 
 for ticker in st.session_state.mis_tickers:
-    cuotas = st.session_state.mis_compras[ticker]["cuotas"]
-    precio_medio = st.session_state.mis_compras[ticker]["precio_medio"]
+    datos_posicion = mis_posiciones.get(ticker, {'cuotas': 0.0, 'precio_medio': 0.0})
+    cuotas = datos_posicion['cuotas']
+    precio_medio = datos_posicion['precio_medio']
     
     if cuotas > 0 and precio_medio > 0 and ticker in datos_portafolio:
         precio_hoy = datos_portafolio[ticker]["vista"]['Close'].iloc[-1]
         total_invertido += (cuotas * precio_medio)
         total_actual += (cuotas * precio_hoy)
 
-ganancia_neta_usd = total_actual - total_invertido
-try:
-    ganancia_neta_pct = (ganancia_neta_usd / total_invertido) * 100
-except:
-    ganancia_neta_pct = 0.0
+ganancia_flotante_usd = total_actual - total_invertido
+desempeño_historico_total = ganancia_flotante_usd + ganancia_realizada_total
 
-if total_invertido > 0:
-    st.subheader("🏦 Mi Patrimonio (USD)")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("💰 Inversión Total", f"${total_invertido:,.2f}")
-    col2.metric("💵 Valor Actual", f"${total_actual:,.2f}")
+if total_invertido > 0 or ganancia_realizada_total != 0:
+    st.subheader("🏦 Mi Patrimonio Histórico (USD)")
+    col1, col2, col3, col4 = st.columns(4)
     
-    if ganancia_neta_usd >= 0:
-        col3.metric("🚀 Ganancia/Pérdida Total", f"+${ganancia_neta_usd:,.2f}", f"+{ganancia_neta_pct:.2f}%")
+    col1.metric("💰 Inversión Activa", f"${total_invertido:,.2f}")
+    col2.metric("💵 Valor Actual", f"${total_actual:,.2f}", f"{ganancia_flotante_usd:,.2f} Flotante")
+    
+    if ganancia_realizada_total >= 0:
+        col3.metric("💼 Ganancia Ya Cobrada", f"+${ganancia_realizada_total:,.2f}", "Caja")
     else:
-        col3.metric("🔻 Ganancia/Pérdida Total", f"${ganancia_neta_usd:,.2f}", f"{ganancia_neta_pct:.2f}%")
+        col3.metric("💼 Pérdida Ya Cobrada", f"${ganancia_realizada_total:,.2f}", "Caja")
+        
+    if desempeño_historico_total >= 0:
+        col4.metric("🏆 Desempeño Histórico Total", f"+${desempeño_historico_total:,.2f}")
+    else:
+        col4.metric("📉 Desempeño Histórico Total", f"${desempeño_historico_total:,.2f}")
+        
     st.divider()
 
 # ==========================================
@@ -298,9 +388,10 @@ for i, ticker in enumerate(st.session_state.mis_tickers):
     col_actual = columnas_grid[i % 3]
     nombre_empresa = st.session_state.nombres_tickers.get(ticker, ticker)
     
-    # Datos de compra del usuario
-    mis_cuotas = st.session_state.mis_compras[ticker]["cuotas"]
-    mi_precio = st.session_state.mis_compras[ticker]["precio_medio"]
+    datos_posicion = mis_posiciones.get(ticker, {'cuotas': 0.0, 'precio_medio': 0.0, 'ganancia_realizada': 0.0})
+    mis_cuotas = datos_posicion['cuotas']
+    mi_precio = datos_posicion['precio_medio']
+    mi_ganancia_cobrada = datos_posicion['ganancia_realizada']
     
     with col_actual:
         col_tit, col_izq, col_der, col_del = st.columns([5, 1, 1, 1])
@@ -334,53 +425,72 @@ for i, ticker in enumerate(st.session_state.mis_tickers):
             precio_actual = hist_vista['Close'].iloc[-1]
             precio_inicial_grafico = hist_vista['Close'].iloc[0] 
             
-            # --- 🧠 LÓGICA DE RECOMENDACIÓN TÉCNICA (Fase 1) ---
+            # --- FASE 1: INDICADORES TÉCNICOS ---
             rsi_actual = hist_vista['RSI'].iloc[-1]
             caida_desde_max = hist_vista['Caida_Desde_Max'].iloc[-1]
             
             if pd.isna(rsi_actual):
-                mensaje_tecnico = "⚪ Esperando datos técnicos..."
+                mensaje_tecnico = "⚪ Técnico: Esperando datos..."
             elif rsi_actual > 70:
-                mensaje_tecnico = f"🔴 **VENDER / ESPERAR:** Sobrecomprada (RSI: {rsi_actual:.0f})."
+                mensaje_tecnico = f"🔴 **Técnico (VENDER/ESPERAR):** Sobrecomprada (RSI: {rsi_actual:.0f})."
             elif rsi_actual < 30:
-                mensaje_tecnico = f"🟢 **COMPRAR:** Sobrevendida (RSI: {rsi_actual:.0f})."
+                mensaje_tecnico = f"🟢 **Técnico (COMPRAR):** Sobrevendida (RSI: {rsi_actual:.0f})."
             elif caida_desde_max < -10:
-                mensaje_tecnico = f"🚨 **ALERTA:** Cayó {caida_desde_max:.1f}% desde su techo."
+                mensaje_tecnico = f"🚨 **Técnico (ALERTA):** Cayó {caida_desde_max:.1f}% desde su techo."
             else:
-                mensaje_tecnico = f"🟡 **MANTENER:** Tendencia normal (RSI: {rsi_actual:.0f})."
+                mensaje_tecnico = f"🟡 **Técnico (MANTENER):** Tendencia normal (RSI: {rsi_actual:.0f})."
 
-            st.caption(mensaje_tecnico)
+            # --- FASE 2: INDICADORES FUNDAMENTALES ---
+            mensaje_fundamental = obtener_fundamentales(ticker)
 
-            # --- 💰 LÓGICA DE GANANCIA REAL (Fase 1.5) ---
+            st.caption(f"{mensaje_tecnico}")
+            st.caption(f"{mensaje_fundamental}")
+
+            # --- LÓGICA DE GANANCIA REAL ---
             if mis_cuotas > 0 and mi_precio > 0:
-                # Si ingresaste datos, calcula tu plata REAL
                 mi_plata_invertida = mis_cuotas * mi_precio
                 mi_plata_actual = mis_cuotas * precio_actual
-                ganancia_real_usd = mi_plata_actual - mi_plata_invertida
-                ganancia_real_pct = (ganancia_real_usd / mi_plata_invertida) * 100
+                ganancia_flotante_usd = mi_plata_actual - mi_plata_invertida
+                ganancia_flotante_pct = (ganancia_flotante_usd / mi_plata_invertida) * 100
                 
-                st.metric(
-                    label=f"Mi Posición ({mis_cuotas} cuotas)", 
-                    value=f"${mi_plata_actual:,.2f}",
-                    delta=f"{ganancia_real_usd:,.2f} USD ({ganancia_real_pct:.2f}%)" 
-                )
+                total_ganancia_este_ticker = ganancia_flotante_usd + mi_ganancia_cobrada
                 
-                # Definimos colores según SI TÚ vas ganando o perdiendo
-                if ganancia_real_usd >= 0:
+                if mi_ganancia_cobrada != 0:
+                    st.metric(
+                        label=f"Posición ({mis_cuotas:.2f}c) + Ya Cobrado", 
+                        value=f"${mi_plata_actual:,.2f}",
+                        delta=f"{total_ganancia_este_ticker:,.2f} USD (Total Histórico)" 
+                    )
+                else:
+                    st.metric(
+                        label=f"Mi Posición ({mis_cuotas:.2f} cuotas)", 
+                        value=f"${mi_plata_actual:,.2f}",
+                        delta=f"{ganancia_flotante_usd:,.2f} USD ({ganancia_flotante_pct:.2f}%)" 
+                    )
+                
+                if ganancia_flotante_usd >= 0:
                     color_linea = '#34c759'
                     color_relleno = 'rgba(52, 199, 89, 0.1)'
                 else:
                     color_linea = '#ff3b30'
                     color_relleno = 'rgba(255, 59, 48, 0.1)'
             else:
-                # Si no hay datos (Modo Sapeo), calcula la variación normal del mercado en el periodo
                 variacion_usd = precio_actual - precio_inicial_grafico
                 variacion_pct = (variacion_usd / precio_inicial_grafico) * 100
-                st.metric(
-                    label="Precio de la Acción (Modo Sapeo)", 
-                    value=f"${precio_actual:.2f}",
-                    delta=f"{variacion_usd:.2f} ({variacion_pct:.2f}%)" 
-                )
+                
+                if mi_ganancia_cobrada != 0:
+                    st.metric(
+                        label="Posición Cerrada. Ganancia ya cobrada:", 
+                        value=f"${mi_ganancia_cobrada:,.2f}",
+                        delta="En Caja" 
+                    )
+                else:
+                    st.metric(
+                        label="Precio de la Acción (Modo Sapeo)", 
+                        value=f"${precio_actual:.2f}",
+                        delta=f"{variacion_usd:.2f} ({variacion_pct:.2f}%)" 
+                    )
+                    
                 if variacion_usd >= 0:
                     color_linea = '#34c759'
                     color_relleno = 'rgba(52, 199, 89, 0.1)'
@@ -402,7 +512,6 @@ for i, ticker in enumerate(st.session_state.mis_tickers):
                 fillcolor=color_relleno 
             ))
 
-            # Línea de referencia del gráfico
             fig.add_hline(
                 y=precio_inicial_grafico, 
                 line_dash="dot", 
@@ -410,8 +519,7 @@ for i, ticker in enumerate(st.session_state.mis_tickers):
                 line_width=1.5,
             )
 
-            # ¡NUEVA LÍNEA!: Si tienes un precio de compra, lo dibuja en amarillo
-            if mi_precio > 0:
+            if mi_precio > 0 and mis_cuotas > 0:
                 fig.add_hline(
                     y=mi_precio, 
                     line_dash="dash", 
@@ -425,8 +533,7 @@ for i, ticker in enumerate(st.session_state.mis_tickers):
             y_min = hist_vista['Close'].min()
             y_max = hist_vista['Close'].max()
             
-            # Aseguramos que el zoom del gráfico incluya tu precio de compra para que no se pierda
-            if mi_precio > 0:
+            if mi_precio > 0 and mis_cuotas > 0:
                 y_min = min(y_min, mi_precio)
                 y_max = max(y_max, mi_precio)
 
