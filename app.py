@@ -20,7 +20,6 @@ def init_connection():
 
 supabase = init_connection()
 
-# Funciones de Transacciones
 def obtener_transacciones():
     try: return supabase.table("transacciones").select("*").execute().data
     except: return []
@@ -29,10 +28,8 @@ def registrar_transaccion(ticker, tipo, cantidad, precio):
     supabase.table("transacciones").insert({
         "ticker": ticker, "tipo": tipo, "cantidad": cantidad, "precio_usd": precio
     }).execute()
-    # Si compras o vendes, nos aseguramos que esté en tu watchlist
     agregar_watchlist(ticker)
 
-# ¡NUEVO! Funciones de Watchlist (Adiós al Link)
 def obtener_watchlist():
     try: return [r['ticker'] for r in supabase.table("watchlist").select("ticker").execute().data]
     except: return []
@@ -51,13 +48,11 @@ def eliminar_watchlist(ticker):
 if "mis_tickers" not in st.session_state:
     st.session_state.mis_tickers = obtener_watchlist()
     if not st.session_state.mis_tickers:
-        st.session_state.mis_tickers = ["VAW"] # Por defecto si está vacía
+        st.session_state.mis_tickers = ["VAW"] 
         agregar_watchlist("VAW")
 
 if "nombres_tickers" not in st.session_state:
     st.session_state.nombres_tickers = {}
-
-# Borramos cualquier rastro de st.query_params (Matamos el link)
 
 # ==========================================
 # MOTOR DE BÚSQUEDA INTELIGENTE
@@ -107,7 +102,7 @@ if not df_tx.empty:
         
         lote_compras = [] 
         ganancia_cobrada_fifo = 0.0
-        ultimo_precio_venta = 0.0 # ¡Para el Radar de Oportunidades!
+        ultimo_precio_venta = 0.0 
         
         for _, row in df_t.iterrows():
             cant = float(row['cantidad'])
@@ -181,17 +176,18 @@ def obtener_fundamentales(ticker):
         margen = info.get('profitMargins', None)
         if margen is None: return "⚪ ETF/Fondo (No aplica fundamental)."
         margen_pct = margen * 100
-        if margen_pct < 0: return f"🔴 **RIESGO:** Empresa perdiendo plata (Margen: {margen_pct:.1f}%)."
-        elif pe is not None and pe > 40: return f"🟡 **REGULAR:** Gana plata pero está cara (P/E: {pe:.1f})."
-        else: return f"🟢 **SÓLIDA:** Negocio sano (P/E: {pe:.1f}, Margen: {margen_pct:.1f}%)."
-    except: return "⚪ Datos fundamentales no disponibles."
+        if margen_pct < 0: return f"🔴 **RIESGO:** Perdiendo plata."
+        elif pe is not None and pe > 40: return f"🟡 **REGULAR:** Gana plata pero cara."
+        else: return f"🟢 **SÓLIDA:** Negocio sano."
+    except: return "⚪ Datos no disponibles."
 
 # ==========================================
 # INTERFAZ PRINCIPAL Y BÚSQUEDA
 # ==========================================
+st.title("Finanzas 📈")
 col_busqueda, col_tiempo = st.columns([2, 1])
 with col_busqueda:
-    texto_busqueda = st.text_input("🔍 Escribe qué buscas (Ej: Apple, oro, SQM) y presiona Enter:", key="buscador")
+    texto_busqueda = st.text_input("🔍 Escribe qué buscas (Ej: Apple, SQM) y presiona Enter:", key="buscador")
     if texto_busqueda:
         resultados = buscar_multiples_tickers(texto_busqueda)
         if resultados:
@@ -214,7 +210,7 @@ with col_tiempo:
 st.divider()
 
 # ==========================================
-# DESCARGA DE DATOS DE YFINANCE
+# DESCARGA DE DATOS DE YFINANCE Y CÁLCULOS
 # ==========================================
 def calcular_indicadores(df):
     delta = df['Close'].diff()
@@ -224,23 +220,17 @@ def calcular_indicadores(df):
     ema_down = down.ewm(com=13, adjust=False).mean()
     rs = ema_up / ema_down
     df['RSI'] = 100 - (100 / (1 + rs))
-    df['Max_Periodo'] = df['Close'].cummax()
-    df['Caida_Desde_Max'] = ((df['Close'] - df['Max_Periodo']) / df['Max_Periodo']) * 100
     return df
 
 datos_portafolio = {}
 cortes_eje_x = [dict(bounds=["sat", "mon"])]
-
-# Filtramos las acciones en 2 grupos: ACTIVAS (cuotas>0) y RADAR (cuotas=0)
 activos_activos = []
 activos_radar = []
 
 for ticker in st.session_state.mis_tickers:
     pos = mis_posiciones.get(ticker, {'cuotas': 0.0})
-    if pos['cuotas'] > 0:
-        activos_activos.append(ticker)
-    else:
-        activos_radar.append(ticker)
+    if pos['cuotas'] > 0: activos_activos.append(ticker)
+    else: activos_radar.append(ticker)
 
     activo = yf.Ticker(ticker)
     hist_full = activo.history(period=config["fetch"], interval=config["interval"])
@@ -276,29 +266,6 @@ col5.metric("🏆 Desempeño Total Neto", f"${desempeño_historico_total - provi
 st.divider()
 
 # ==========================================
-# GRÁFICO GLOBAL (SÓLO ACTIVAS)
-# ==========================================
-if activos_activos and any(t in datos_portafolio for t in activos_activos):
-    st.subheader("🌐 Rendimiento de mis Acciones Activas (%)")
-    fig_global = go.Figure()
-    
-    global_y_min, global_y_max = float('inf'), float('-inf')
-    for ticker in activos_activos:
-        if ticker in datos_portafolio:
-            hist_full = datos_portafolio[ticker]["full"]
-            hist_vista = datos_portafolio[ticker]["vista"]
-            precio_base = hist_vista['Close'].iloc[0]
-            rendimiento_pct = ((hist_full['Close'] - precio_base) / precio_base) * 100
-            global_y_min = min(global_y_min, rendimiento_pct.min())
-            global_y_max = max(global_y_max, rendimiento_pct.max())
-            fig_global.add_trace(go.Scatter(x=hist_full.index, y=rendimiento_pct, mode='lines', name=ticker))
-
-    fig_global.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.5)")
-    fig_global.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified")
-    st.plotly_chart(fig_global, use_container_width=True)
-    st.divider()
-
-# ==========================================
 # SECCIÓN: MIS INVERSIONES ACTIVAS
 # ==========================================
 if activos_activos:
@@ -314,81 +281,118 @@ if activos_activos:
         precio_actual = hist_vista['Close'].iloc[-1]
         
         with col_actual:
-            col_t, col_del = st.columns([5, 1])
-            col_t.markdown(f"**{nombre_empresa} ({ticker})**")
-            if col_del.button("❌", key=f"del_{ticker}"):
-                eliminar_watchlist(ticker)
-                st.session_state.mis_tickers.remove(ticker)
-                st.rerun()
+            with st.container(border=True):
+                col_t, col_del = st.columns([5, 1])
+                col_t.markdown(f"**{nombre_empresa} ({ticker})**")
+                if col_del.button("❌", key=f"del_{ticker}"):
+                    eliminar_watchlist(ticker)
+                    st.session_state.mis_tickers.remove(ticker)
+                    st.rerun()
+                    
+                rsi_actual = hist_vista['RSI'].iloc[-1]
+                if rsi_actual > 70: msj_tec = f"🔴 **Sobrecomprada** (RSI: {rsi_actual:.0f})"
+                elif rsi_actual < 30: msj_tec = f"🟢 **Sobrevendida** (RSI: {rsi_actual:.0f})"
+                else: msj_tec = f"🟡 **Normal** (RSI: {rsi_actual:.0f})"
+                st.caption(f"{msj_tec} | {obtener_fundamentales(ticker)}")
+
+                ganancia_usd = (precio_actual - datos_pos['precio_medio']) * datos_pos['cuotas']
+                ganancia_pct = (ganancia_usd / (datos_pos['precio_medio'] * datos_pos['cuotas'])) * 100 if datos_pos['precio_medio'] > 0 else 0
+                st.metric(f"Posición ({datos_pos['cuotas']:.2f}c)", f"${precio_actual * datos_pos['cuotas']:,.2f}", f"{ganancia_usd:,.2f} USD ({ganancia_pct:.2f}%)")
                 
-            # Lógica Técnica y Fundamental
-            rsi_actual = hist_vista['RSI'].iloc[-1]
-            if rsi_actual > 70: msj_tec = f"🔴 **Técnico:** Sobrecomprada (RSI: {rsi_actual:.0f})"
-            elif rsi_actual < 30: msj_tec = f"🟢 **Técnico:** Sobrevendida (RSI: {rsi_actual:.0f})"
-            else: msj_tec = f"🟡 **Técnico:** Normal (RSI: {rsi_actual:.0f})"
-            st.caption(f"{msj_tec}\n\n{obtener_fundamentales(ticker)}")
+                if st.button("💰 Vender Todo AHORA", key=f"sell_{ticker}", use_container_width=True):
+                    registrar_transaccion(ticker, "VENTA", datos_pos['cuotas'], precio_actual)
+                    st.success(f"¡Vendiste todo {ticker}!")
+                    time.sleep(1)
+                    st.rerun()
 
-            ganancia_usd = (precio_actual - datos_pos['precio_medio']) * datos_pos['cuotas']
-            ganancia_pct = (ganancia_usd / (datos_pos['precio_medio'] * datos_pos['cuotas'])) * 100 if datos_pos['precio_medio'] > 0 else 0
-            st.metric(f"Posición ({datos_pos['cuotas']:.2f}c)", f"${precio_actual * datos_pos['cuotas']:,.2f}", f"{ganancia_usd:,.2f} USD ({ganancia_pct:.2f}%)")
-            
-            # ¡BOTÓN VENDER TODO!
-            if st.button("💰 Vender Todo AHORA", key=f"sell_{ticker}", use_container_width=True):
-                registrar_transaccion(ticker, "VENTA", datos_pos['cuotas'], precio_actual)
-                st.success(f"¡Vendiste todo {ticker} a ${precio_actual:.2f}!")
-                time.sleep(1.5)
-                st.rerun()
-
-            fig = go.Figure(go.Scatter(x=hist_vista.index, y=hist_vista['Close'], line=dict(color='#34c759' if ganancia_usd >= 0 else '#ff3b30')))
-            fig.add_hline(y=datos_pos['precio_medio'], line_dash="dash", line_color="#ffd60a", annotation_text="Mi Compra")
-            fig.update_layout(template="plotly_dark", height=200, margin=dict(l=0,r=0,t=0,b=0), xaxis=dict(visible=False))
-            st.plotly_chart(fig, use_container_width=True)
+                fig = go.Figure(go.Scatter(x=hist_vista.index, y=hist_vista['Close'], line=dict(color='#34c759' if ganancia_usd >= 0 else '#ff3b30')))
+                fig.add_hline(y=datos_pos['precio_medio'], line_dash="dash", line_color="#ffd60a", annotation_text="Compra")
+                fig.update_layout(template="plotly_dark", height=150, margin=dict(l=0,r=0,t=0,b=0), xaxis=dict(visible=False), yaxis=dict(visible=False))
+                st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
 # ==========================================
-# SECCIÓN: RADAR DE OPORTUNIDADES (Cementerio Inteligente) 🧟‍♂️📈
+# 🎯 SECCIÓN: RADAR DE OPORTUNIDADES (LA LÓGICA DEL USUARIO)
 # ==========================================
 if activos_radar:
-    st.subheader("🎯 Radar de Oportunidades (Acciones que vendiste o sigues)")
-    st.caption("La app compara el precio actual con el último precio al que vendiste para decirte si conviene recomprar.")
+    st.subheader("🎯 Radar de Seguimiento y Oportunidades")
+    st.markdown("Tabla ordenada automáticamente priorizando acciones que **se están recuperando** y muestran señales de compra sólida.")
     
-    columnas_radar = st.columns(3)
+    col_tabla, col_grafico = st.columns([2, 3])
     
-    for i, ticker in enumerate(activos_radar):
+    datos_tabla = []
+    fig_radar = go.Figure()
+    
+    for ticker in activos_radar:
         if ticker not in datos_portafolio: continue
-        col_actual = columnas_radar[i % 3]
-        nombre_empresa = st.session_state.nombres_tickers.get(ticker, ticker)
         datos_pos = mis_posiciones.get(ticker, {'ultimo_precio_venta': 0.0})
         ultimo_precio = datos_pos.get('ultimo_precio_venta', 0.0)
         
+        hist_full = datos_portafolio[ticker]["full"]
         hist_vista = datos_portafolio[ticker]["vista"]
         precio_actual = hist_vista['Close'].iloc[-1]
+        rsi_actual = hist_vista['RSI'].iloc[-1]
         
-        with col_actual:
-            with st.container(border=True):
-                col_t, col_del = st.columns([5, 1])
-                col_t.markdown(f"**{ticker}**")
-                if col_del.button("❌", key=f"del_rad_{ticker}"):
-                    eliminar_watchlist(ticker)
-                    st.session_state.mis_tickers.remove(ticker)
-                    st.rerun()
-                
-                # Cálculo de descuento frente a tu venta
-                if ultimo_precio > 0:
-                    dif_usd = precio_actual - ultimo_precio
-                    dif_pct = (dif_usd / ultimo_precio) * 100
-                    if dif_usd < 0:
-                        st.success(f"🔥 ¡Está {abs(dif_pct):.1f}% MÁS BARATA que cuando la vendiste (${ultimo_precio:.1f})!")
-                    else:
-                        st.warning(f"Está {dif_pct:.1f}% más cara que cuando la vendiste (${ultimo_precio:.1f}).")
-                else:
-                    st.info("Solo en seguimiento (Nunca comprada).")
+        # LÓGICA NUEVA: MOMENTUM / REMONTADA
+        # Prioridad 1: Remontando (Oportunidad de oro)
+        # Prioridad 2: Tendencia Alcista Fuerte
+        # Prioridad 3: Cayendo (Peligro, cuchillo cayendo)
+        
+        prioridad = 3 
+        
+        if ultimo_precio > 0:
+            precio_base = ultimo_precio
+            dif_pct = ((precio_actual - ultimo_precio) / ultimo_precio) * 100
+            
+            if dif_pct < 0 and rsi_actual > 40: 
+                estado = "🔥 REMONTANDO (Oportunidad)"
+                prioridad = 1
+            elif dif_pct < 0 and rsi_actual <= 40:
+                estado = "📉 Cayendo (Esperar confirmación)"
+                prioridad = 3
+            else:
+                estado = "📈 Tendencia Alcista (Cara)"
+                prioridad = 2
+        else:
+            precio_base = hist_vista['Close'].iloc[0]
+            dif_pct = ((precio_actual - precio_base) / precio_base) * 100
+            estado = "⚪ En Seguimiento"
+            prioridad = 2 if rsi_actual > 40 else 3
 
-                # Analítica
-                rsi_actual = hist_vista['RSI'].iloc[-1]
-                if rsi_actual < 30: st.markdown("🟢 **RSI: Sobrevendida. ¡Buena opción de recompra!**")
-                elif rsi_actual > 70: st.markdown("🔴 **RSI: Muy cara todavía. Sigue esperando.**")
-                else: st.markdown("🟡 **RSI: Terreno neutral.**")
-                
-                st.metric("Precio Mercado", f"${precio_actual:.2f}")
+        if rsi_actual < 30: señal = "COMPRAR (Sobrevendida)"
+        elif rsi_actual > 70: señal = "ESPERAR (Sobrecomprada)"
+        else: señal = "Neutral / Recuperando"
+        
+        datos_tabla.append({
+            "Ticker": ticker,
+            "Última Venta": f"${ultimo_precio:.2f}" if ultimo_precio > 0 else "N/A",
+            "Precio Hoy": f"${precio_actual:.2f}",
+            "Estado": estado,
+            "Señal": señal,
+            "_prioridad": prioridad # Columna oculta para ordenar
+        })
+        
+        rendimiento_radar_pct = ((hist_full['Close'] - precio_base) / precio_base) * 100
+        fig_radar.add_trace(go.Scatter(x=hist_full.index, y=rendimiento_radar_pct, mode='lines', name=ticker))
+
+    # ORDENAR TABLA POR PRIORIDAD (Las "Remontando" arriba)
+    if datos_tabla:
+        df_radar_vista = pd.DataFrame(datos_tabla)
+        df_radar_vista = df_radar_vista.sort_values(by="_prioridad")
+        df_radar_vista = df_radar_vista.drop(columns=["_prioridad"])
+        
+        with col_tabla:
+            st.dataframe(df_radar_vista, hide_index=True, use_container_width=True)
+
+    with col_grafico:
+        fig_radar.add_hline(y=0, line_dash="dash", line_color="#ffffff", annotation_text="Punto de Venta")
+        fig_radar.update_layout(
+            template="plotly_dark", 
+            height=300, 
+            margin=dict(l=0,r=0,t=10,b=0), 
+            yaxis=dict(title="% Variación post-venta", side="right", ticksuffix="%"),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
