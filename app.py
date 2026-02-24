@@ -188,9 +188,6 @@ def calcular_indicadores(df):
     return df
 
 datos_portafolio = {}
-cortes_eje_x = [dict(bounds=["sat", "mon"])]
-if config["interval"] in ["5m", "15m"]: cortes_eje_x.append(dict(bounds=[16, 9.5], pattern="hour"))
-
 activos_activos = [t for t, p in mis_posiciones.items() if p['cuotas'] > 0]
 activos_radar = [t for t in st.session_state.mis_tickers if t not in activos_activos]
 
@@ -209,6 +206,18 @@ for ticker in st.session_state.mis_tickers:
         if hist_vista.empty: hist_vista = hist_full 
         datos_portafolio[ticker] = {"full": hist_full, "vista": hist_vista, "inicio": fecha_inicio, "fin": fecha_fin}
 
+cortes_eje_x = [dict(bounds=["sat", "mon"])]
+if config["interval"] in ["5m", "15m"]: 
+    cortes_eje_x.append(dict(bounds=[16, 9.5], pattern="hour"))
+
+if datos_portafolio:
+    primer_t = list(datos_portafolio.keys())[0]
+    fechas_reales = datos_portafolio[primer_t]["full"].index.normalize().unique()
+    if len(fechas_reales) > 1:
+        rango_completo = pd.date_range(start=fechas_reales.min(), end=fechas_reales.max(), freq='D')
+        dias_faltantes = rango_completo.difference(fechas_reales)
+        if not dias_faltantes.empty:
+            cortes_eje_x.append(dict(values=dias_faltantes.strftime('%Y-%m-%d').tolist()))
 # ==========================================
 # BLOQUE 9: RESUMEN PATRIMONIO EN PESOS (CLP)
 # ==========================================
@@ -258,7 +267,7 @@ if activos_activos and any(t in datos_portafolio for t in activos_activos):
     rango_inicio, rango_fin = datos_portafolio[primer_t]["inicio"], datos_portafolio[primer_t]["fin"]
     
     fig_global_activos.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.5)")
-    fig_global_activos.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified", xaxis=dict(range=[rango_inicio, rango_fin], rangebreaks=cortes_eje_x, showgrid=False), yaxis=dict(range=[global_y_min, global_y_max], title="Rendimiento %", side="right", ticksuffix="%"))
+    fig_global_activos.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified", dragmode="pan", xaxis=dict(range=[rango_inicio, rango_fin], rangebreaks=cortes_eje_x, showgrid=False), yaxis=dict(range=[global_y_min, global_y_max], title="Rendimiento %", side="right", ticksuffix="%"))
     st.plotly_chart(fig_global_activos, use_container_width=True)
     st.divider()
 
@@ -300,7 +309,7 @@ if activos_activos:
                     st.rerun()
                 fig = go.Figure(go.Scatter(x=hist_vista.index, y=hist_vista['Close'], line=dict(color='#34c759' if ganancia_clp >= 0 else '#ff3b30')))
                 fig.add_hline(y=datos_pos['precio_medio_usd'], line_dash="dash", line_color="#ffd60a", annotation_text="Compra (USD)")
-                fig.update_layout(template="plotly_dark", height=150, margin=dict(l=0,r=0,t=0,b=0), xaxis=dict(visible=False, rangebreaks=cortes_eje_x), yaxis=dict(visible=False))
+                fig.update_layout(template="plotly_dark", height=150, margin=dict(l=0,r=0,t=0,b=0), dragmode="pan", xaxis=dict(visible=False, rangebreaks=cortes_eje_x), yaxis=dict(visible=False))
                 st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
@@ -355,5 +364,6 @@ if activos_radar:
         with col_tabla: st.dataframe(df_radar, hide_index=True, use_container_width=True)
     with col_grafico:
         fig_radar.add_hline(y=0, line_dash="dash", line_color="#ffffff", annotation_text="Punto Referencia")
-        fig_radar.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=10,b=0), yaxis=dict(range=[radar_y_min, radar_y_max], side="right", ticksuffix="%"), xaxis=dict(range=[rango_ini_radar, rango_fin_radar], rangebreaks=cortes_eje_x), hovermode="x unified")
+        fig_radar.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=10,b=0), dragmode="pan", yaxis=dict(range=[radar_y_min, radar_y_max], side="right", ticksuffix="%"), xaxis=dict(range=[rango_ini_radar, rango_fin_radar], rangebreaks=cortes_eje_x), hovermode="x unified")
         st.plotly_chart(fig_radar, use_container_width=True)
+
