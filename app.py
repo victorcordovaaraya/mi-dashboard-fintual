@@ -195,6 +195,8 @@ for ticker in st.session_state.mis_tickers:
     activo = yf.Ticker(ticker)
     hist_full = activo.history(period=config["fetch"], interval=config["interval"])
     if not hist_full.empty:
+        if hist_full.index.tz is not None:
+            hist_full.index = hist_full.index.tz_localize(None)
         hist_full = calcular_indicadores(hist_full)
         fecha_fin = hist_full.index[-1]
         if config["dias_vista"] == "YTD":
@@ -211,11 +213,13 @@ if config["interval"] in ["5m", "15m"]:
     cortes_eje_x.append(dict(bounds=[16, 9.5], pattern="hour"))
 
 if datos_portafolio:
-    primer_t = list(datos_portafolio.keys())[0]
-    fechas_reales = datos_portafolio[primer_t]["full"].index.normalize().unique()
-    if len(fechas_reales) > 1:
-        rango_completo = pd.date_range(start=fechas_reales.min(), end=fechas_reales.max(), freq='D')
-        dias_faltantes = rango_completo.difference(fechas_reales)
+    todas_fechas = pd.DatetimeIndex([])
+    for t in datos_portafolio:
+        todas_fechas = todas_fechas.union(datos_portafolio[t]["full"].index.normalize())
+    todas_fechas = todas_fechas.unique()
+    if len(todas_fechas) > 1:
+        rango_completo = pd.date_range(start=todas_fechas.min(), end=todas_fechas.max(), freq='D')
+        dias_faltantes = rango_completo.difference(todas_fechas)
         if not dias_faltantes.empty:
             cortes_eje_x.append(dict(values=dias_faltantes.strftime('%Y-%m-%d').tolist()))
 # ==========================================
@@ -270,7 +274,6 @@ if activos_activos and any(t in datos_portafolio for t in activos_activos):
     fig_global_activos.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified", dragmode="pan", xaxis=dict(range=[rango_inicio, rango_fin], rangebreaks=cortes_eje_x, showgrid=False), yaxis=dict(range=[global_y_min, global_y_max], title="Rendimiento %", side="right", ticksuffix="%"))
     st.plotly_chart(fig_global_activos, use_container_width=True)
     st.divider()
-
 # ==========================================
 # BLOQUE 11: DETALLE INDIVIDUAL DE PORTAFOLIO
 # ==========================================
