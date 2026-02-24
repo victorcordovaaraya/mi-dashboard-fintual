@@ -241,17 +241,31 @@ st.divider()
 if activos_activos and any(t in datos_portafolio for t in activos_activos):
     st.subheader("🌐 Rendimiento de Mis Acciones Compradas (%)")
     fig_global_activos = go.Figure()
+    global_y_min, global_y_max = float('inf'), float('-inf')
+    
     for ticker in activos_activos:
         if ticker in datos_portafolio:
             hist_full = datos_portafolio[ticker]["full"]
             hist_vista = datos_portafolio[ticker]["vista"]
             precio_base = hist_vista['Close'].iloc[0]
             rendimiento_pct = ((hist_full['Close'] - precio_base) / precio_base) * 100
+            rendimiento_vista = ((hist_vista['Close'] - precio_base) / precio_base) * 100
+            
+            global_y_min = min(global_y_min, rendimiento_vista.min())
+            global_y_max = max(global_y_max, rendimiento_vista.max())
+            
             fig_global_activos.add_trace(go.Scatter(x=hist_full.index, y=rendimiento_pct, mode='lines', name=ticker, line=dict(width=2)))
+            
+    if global_y_min == float('inf'):
+        global_y_min, global_y_max = -10, 10
+    elif global_y_min == global_y_max:
+        global_y_min, global_y_max = global_y_min - 1, global_y_max + 1
+
     primer_t = activos_activos[0] if activos_activos[0] in datos_portafolio else list(datos_portafolio.keys())[0]
     rango_inicio, rango_fin = datos_portafolio[primer_t]["inicio"], datos_portafolio[primer_t]["fin"]
+    
     fig_global_activos.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.5)")
-    fig_global_activos.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified", xaxis=dict(range=[rango_inicio, rango_fin], rangebreaks=cortes_eje_x, showgrid=False), yaxis=dict(title="Rendimiento %", side="right", ticksuffix="%"))
+    fig_global_activos.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified", xaxis=dict(range=[rango_inicio, rango_fin], rangebreaks=cortes_eje_x, showgrid=False), yaxis=dict(range=[global_y_min, global_y_max], title="Rendimiento %", side="right", ticksuffix="%"))
     st.plotly_chart(fig_global_activos, use_container_width=True)
     st.divider()
 
@@ -300,8 +314,11 @@ if activos_radar:
     col_tabla, col_grafico = st.columns([2, 3])
     datos_tabla = []
     fig_radar = go.Figure()
+    
     primer_t_radar = activos_radar[0] if activos_radar[0] in datos_portafolio else list(datos_portafolio.keys())[0]
     rango_ini_radar, rango_fin_radar = datos_portafolio[primer_t_radar]["inicio"], datos_portafolio[primer_t_radar]["fin"]
+    radar_y_min, radar_y_max = float('inf'), float('-inf')
+    
     for ticker in activos_radar:
         if ticker not in datos_portafolio: continue
         ultimo_precio = mis_posiciones.get(ticker, {}).get('ultimo_precio_venta', 0.0)
@@ -320,12 +337,24 @@ if activos_radar:
             dif_pct = ((precio_actual - precio_base) / precio_base) * 100
             est, pri = "⚪ Seguimiento", 2 if rsi_actual > 40 else 3
         datos_tabla.append({"Ticker": ticker, "Venta USD": f"${ultimo_precio:.2f}" if ultimo_precio > 0 else "N/A", "Hoy USD": f"${precio_actual:.2f}", "Estado": est, "_p": pri})
-        rendimiento_radar_pct = ((hist_full['Close'] - precio_base) / precio_base) * 100
-        fig_radar.add_trace(go.Scatter(x=hist_full.index, y=rendimiento_radar_pct, mode='lines', name=ticker))
+        
+        rendimiento_radar_full = ((hist_full['Close'] - precio_base) / precio_base) * 100
+        rendimiento_radar_vista = ((hist_vista['Close'] - precio_base) / precio_base) * 100
+        
+        radar_y_min = min(radar_y_min, rendimiento_radar_vista.min())
+        radar_y_max = max(radar_y_max, rendimiento_radar_vista.max())
+        
+        fig_radar.add_trace(go.Scatter(x=hist_full.index, y=rendimiento_radar_full, mode='lines', name=ticker))
+        
+    if radar_y_min == float('inf'):
+        radar_y_min, radar_y_max = -10, 10
+    elif radar_y_min == radar_y_max:
+        radar_y_min, radar_y_max = radar_y_min - 1, radar_y_max + 1
+
     if datos_tabla:
         df_radar = pd.DataFrame(datos_tabla).sort_values(by="_p").drop(columns=["_p"])
         with col_tabla: st.dataframe(df_radar, hide_index=True, use_container_width=True)
     with col_grafico:
         fig_radar.add_hline(y=0, line_dash="dash", line_color="#ffffff", annotation_text="Punto Referencia")
-        fig_radar.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=10,b=0), yaxis=dict(side="right", ticksuffix="%"), xaxis=dict(range=[rango_ini_radar, rango_fin_radar], rangebreaks=cortes_eje_x), hovermode="x unified")
+        fig_radar.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=10,b=0), yaxis=dict(range=[radar_y_min, radar_y_max], side="right", ticksuffix="%"), xaxis=dict(range=[rango_ini_radar, rango_fin_radar], rangebreaks=cortes_eje_x), hovermode="x unified")
         st.plotly_chart(fig_radar, use_container_width=True)
