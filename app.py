@@ -286,100 +286,7 @@ col5.metric("🏆 Desempeño Neto Total", f"${desempeño_historico_total_clp - p
 st.divider()
 
 # ==========================================
-# 10. GRÁFICO GLOBAL: MIS INVERSIONES ACTIVAS
-# ==========================================
-if activos_activos and any(t in datos_portafolio for t in activos_activos):
-    st.subheader("🌐 Rendimiento de Mis Acciones Compradas (%)")
-    fig_global_activos = go.Figure()
-    global_y_min, global_y_max = float('inf'), float('-inf')
-    
-    for ticker in activos_activos:
-        if ticker in datos_portafolio:
-            hist_full = datos_portafolio[ticker]["full"]
-            hist_vista = datos_portafolio[ticker]["vista"]
-            precio_base = hist_vista['Close'].iloc[0]
-            rendimiento_pct = ((hist_full['Close'] - precio_base) / precio_base) * 100
-            
-            global_y_min = min(global_y_min, rendimiento_pct.min())
-            global_y_max = max(global_y_max, rendimiento_pct.max())
-            
-            fig_global_activos.add_trace(go.Scatter(x=hist_full.index, y=rendimiento_pct, mode='lines', name=ticker, line=dict(width=2)))
-
-    primer_t = activos_activos[0] if activos_activos[0] in datos_portafolio else list(datos_portafolio.keys())[0]
-    rango_inicio, rango_fin = datos_portafolio[primer_t]["inicio"], datos_portafolio[primer_t]["fin"]
-
-    # --- MATEMÁTICA DE MÁRGENES (¡RECUPERADA!) ---
-    global_y_min = min(global_y_min, 0)
-    global_y_max = max(global_y_max, 0)
-    margen_global = (global_y_max - global_y_min) * 0.1
-    if margen_global == 0: margen_global = 1
-    limite_inferior = global_y_min - margen_global
-    limite_superior = global_y_max + margen_global
-    # --------------------------------------------
-
-    fig_global_activos.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.5)")
-    fig_global_activos.update_layout(
-        template="plotly_dark", height=350, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified",
-        xaxis=dict(range=[rango_inicio, rango_fin], rangebreaks=cortes_eje_x, showgrid=False),
-        yaxis=dict(range=[limite_inferior, limite_superior], title="Rendimiento %", side="right", ticksuffix="%")
-    )
-    st.plotly_chart(fig_global_activos, use_container_width=True)
-    st.divider()
-
-# ==========================================
-# 11. DETALLE INDIVIDUAL DE INVERSIONES
-# ==========================================
-if activos_activos:
-    st.subheader("📈 Detalle de mi Portafolio")
-    columnas_grid = st.columns(3)
-    
-    for i, ticker in enumerate(activos_activos):
-        if ticker not in datos_portafolio: continue
-        col_actual = columnas_grid[i % 3]
-        nombre_empresa = st.session_state.nombres_tickers.get(ticker, ticker)
-        datos_pos = mis_posiciones[ticker]
-        hist_vista = datos_portafolio[ticker]["vista"]
-        precio_actual_usd = hist_vista['Close'].iloc[-1]
-        
-        with col_actual:
-            with st.container(border=True):
-                col_t, col_del = st.columns([5, 1])
-                col_t.markdown(f"**{nombre_empresa} ({ticker})**")
-                if col_del.button("❌", key=f"del_{ticker}"):
-                    eliminar_watchlist(ticker)
-                    st.session_state.mis_tickers.remove(ticker)
-                    st.rerun()
-
-                rsi_actual = hist_vista['RSI'].iloc[-1]
-                if rsi_actual > 70: msj_tec = f"🔴 **Sobrecomprada** (RSI: {rsi_actual:.0f})"
-                elif rsi_actual < 30: msj_tec = f"🟢 **Sobrevendida** (RSI: {rsi_actual:.0f})"
-                else: msj_tec = f"🟡 **Normal** (RSI: {rsi_actual:.0f})"
-                st.caption(f"{msj_tec} | {obtener_fundamentales(ticker)}")
-
-                inversion_inicial_clp = datos_pos['costo_total_clp']
-                valor_hoy_clp = (datos_pos['cuotas'] * precio_actual_usd) * dolar_hoy
-                ganancia_clp = valor_hoy_clp - inversion_inicial_clp
-                ganancia_pct_clp = (ganancia_clp / inversion_inicial_clp) * 100 if inversion_inicial_clp > 0 else 0
-                
-                st.metric(f"Posición ({datos_pos['cuotas']:.2f}c) a ${precio_actual_usd:.2f} USD", 
-                          f"${valor_hoy_clp:,.0f} CLP", 
-                          f"{ganancia_clp:,.0f} CLP ({ganancia_pct_clp:.1f}%)")
-                
-                if st.button("💰 Vender Todo AHORA", key=f"sell_{ticker}", use_container_width=True):
-                    registrar_transaccion(ticker, "VENTA", datos_pos['cuotas'], precio_actual_usd, dolar_hoy)
-                    st.success("¡Vendido!")
-                    time.sleep(1)
-                    st.rerun()
-
-                fig = go.Figure(go.Scatter(x=hist_vista.index, y=hist_vista['Close'], line=dict(color='#34c759' if ganancia_clp >= 0 else '#ff3b30')))
-                fig.add_hline(y=datos_pos['precio_medio_usd'], line_dash="dash", line_color="#ffd60a", annotation_text="Compra (USD)")
-                fig.update_layout(template="plotly_dark", height=150, margin=dict(l=0,r=0,t=0,b=0), xaxis=dict(visible=False, rangebreaks=cortes_eje_x), yaxis=dict(visible=False))
-                st.plotly_chart(fig, use_container_width=True)
-
-st.divider()
-
-# ==========================================
-# 12. RADAR DE OPORTUNIDADES
+# 12. RADAR DE OPORTUNIDADES (¡MÁRGENES CORREGIDOS!)
 # ==========================================
 if activos_radar:
     st.subheader("🎯 Radar de Seguimiento y Oportunidades")
@@ -389,8 +296,6 @@ if activos_radar:
     
     primer_t_radar = activos_radar[0] if activos_radar[0] in datos_portafolio else list(datos_portafolio.keys())[0]
     rango_ini_radar, rango_fin_radar = datos_portafolio[primer_t_radar]["inicio"], datos_portafolio[primer_t_radar]["fin"]
-
-    radar_y_min, radar_y_max = float('inf'), float('-inf')
 
     for ticker in activos_radar:
         if ticker not in datos_portafolio: continue
@@ -414,9 +319,6 @@ if activos_radar:
         datos_tabla.append({"Ticker": ticker, "Venta USD": f"${ultimo_precio:.2f}" if ultimo_precio > 0 else "N/A", "Hoy USD": f"${precio_actual:.2f}", "Estado": est, "_p": pri})
         
         rendimiento_radar_pct = ((hist_full['Close'] - precio_base) / precio_base) * 100
-        radar_y_min = min(radar_y_min, rendimiento_radar_pct.min())
-        radar_y_max = max(radar_y_max, rendimiento_radar_pct.max())
-        
         fig_radar.add_trace(go.Scatter(x=hist_full.index, y=rendimiento_radar_pct, mode='lines', name=ticker))
 
     if datos_tabla:
@@ -424,22 +326,12 @@ if activos_radar:
         with col_tabla: st.dataframe(df_radar, hide_index=True, use_container_width=True)
 
     with col_grafico:
-        # --- MATEMÁTICA DE MÁRGENES (RADAR) ---
-        if radar_y_min != float('inf'):
-            radar_y_min = min(radar_y_min, 0)
-            radar_y_max = max(radar_y_max, 0)
-            margen_radar = (radar_y_max - radar_y_min) * 0.1
-            if margen_radar == 0: margen_radar = 1
-            limite_inf_radar = radar_y_min - margen_radar
-            limite_sup_radar = radar_y_max + margen_radar
-        else:
-            limite_inf_radar, limite_sup_radar = -10, 10
-        # --------------------------------------
-
         fig_radar.add_hline(y=0, line_dash="dash", line_color="#ffffff", annotation_text="Punto Referencia")
+        
+        # Plotly ahora se ajusta al milímetro de la curva
         fig_radar.update_layout(
             template="plotly_dark", height=300, margin=dict(l=0,r=0,t=10,b=0), 
-            yaxis=dict(range=[limite_inf_radar, limite_sup_radar], side="right", ticksuffix="%"),
+            yaxis=dict(side="right", ticksuffix="%"),
             xaxis=dict(range=[rango_ini_radar, rango_fin_radar], rangebreaks=cortes_eje_x), hovermode="x unified"
         )
         st.plotly_chart(fig_radar, use_container_width=True)
