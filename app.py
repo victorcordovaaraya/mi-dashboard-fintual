@@ -6,6 +6,9 @@ import time
 import requests 
 from database import obtener_transacciones, registrar_transaccion, obtener_watchlist, agregar_watchlist, eliminar_watchlist, obtener_configuracion, guardar_configuracion
 
+# ==========================================
+# BLOQUE 1: CONFIGURACIÓN INICIAL
+# ==========================================
 st.set_page_config(page_title="Mi Portafolio", layout="wide", initial_sidebar_state="collapsed")
 
 @st.cache_data(ttl=600)
@@ -15,6 +18,9 @@ def obtener_dolar_actual():
 
 dolar_hoy = obtener_dolar_actual()
 
+# ==========================================
+# BLOQUE 2: MEMORIA PERSISTENTE (SESSION STATE)
+# ==========================================
 if "mis_tickers" not in st.session_state:
     st.session_state.mis_tickers = obtener_watchlist()
     if not st.session_state.mis_tickers:
@@ -29,6 +35,9 @@ if "config_cargada" not in st.session_state:
     st.session_state.tramo_nombre = config_db["tramo_nombre"]
     st.session_state.config_cargada = True
 
+# ==========================================
+# BLOQUE 3: MOTOR DE BÚSQUEDA
+# ==========================================
 def buscar_multiples_tickers(texto):
     url = f"https://query2.finance.yahoo.com/v1/finance/search?q={texto}"
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -54,6 +63,9 @@ def accion_agregar(ticker_real, nombre_real):
         st.session_state.nombres_tickers[ticker_real] = nombre_real
         agregar_watchlist(ticker_real)
 
+# ==========================================
+# BLOQUE 4: CÁLCULO DE LIBRO MAYOR (FIFO BIMONETARIO)
+# ==========================================
 tx_data = obtener_transacciones()
 df_tx = pd.DataFrame(tx_data)
 mis_posiciones = {}
@@ -96,6 +108,9 @@ if not df_tx.empty:
         }
         ganancia_realizada_total_clp += gan_clp_ticker
 
+# ==========================================
+# BLOQUE 5: MENÚ LATERAL (TERMINAL Y SII)
+# ==========================================
 with st.sidebar:
     st.title("💼 Mi Terminal")
     st.metric("Dólar Mercado Hoy", f"${dolar_hoy:,.1f} CLP")
@@ -123,6 +138,9 @@ with st.sidebar:
             st.rerun()
         st.caption(f"Tasa a retener SII: **{st.session_state.tasa_impuesto}%**")
 
+# ==========================================
+# BLOQUE 6: ANÁLISIS FUNDAMENTAL
+# ==========================================
 @st.cache_data(ttl=3600) 
 def obtener_fundamentales(ticker):
     try:
@@ -136,6 +154,9 @@ def obtener_fundamentales(ticker):
         else: return f"🟢 **SÓLIDA:** Negocio sano (P/E: {pe:.1f}, Margen: {margen_pct:.1f}%)."
     except: return "⚪ Datos no disponibles."
 
+# ==========================================
+# BLOQUE 7: INTERFAZ PRINCIPAL Y BÚSQUEDA
+# ==========================================
 st.title("Finanzas 📈🇨🇱")
 col_busqueda, col_tiempo = st.columns([2, 1])
 with col_busqueda:
@@ -153,6 +174,9 @@ with col_tiempo:
 
 st.divider()
 
+# ==========================================
+# BLOQUE 8: DESCARGA DE DATOS Y TÉCNICO (RSI)
+# ==========================================
 def calcular_indicadores(df):
     delta = df['Close'].diff()
     up = delta.clip(lower=0)
@@ -185,6 +209,9 @@ for ticker in st.session_state.mis_tickers:
         if hist_vista.empty: hist_vista = hist_full 
         datos_portafolio[ticker] = {"full": hist_full, "vista": hist_vista, "inicio": fecha_inicio, "fin": fecha_fin}
 
+# ==========================================
+# BLOQUE 9: RESUMEN PATRIMONIO EN PESOS (CLP)
+# ==========================================
 total_invertido_clp = sum(mis_posiciones.get(t, {}).get('costo_total_clp', 0.0) for t in activos_activos)
 total_actual_usd = sum(mis_posiciones.get(t, {}).get('cuotas', 0) * datos_portafolio[t]["vista"]['Close'].iloc[-1] for t in activos_activos if t in datos_portafolio)
 total_actual_clp = total_actual_usd * dolar_hoy 
@@ -201,6 +228,9 @@ col4.metric("🏛️ Provisión SII", f"-${provision_sii_clp:,.0f} CLP")
 col5.metric("🏆 Desempeño Neto Total", f"${desempeño_historico_total_clp - provision_sii_clp:,.0f} CLP")
 st.divider()
 
+# ==========================================
+# BLOQUE 10: GRÁFICO GLOBAL MIS INVERSIONES
+# ==========================================
 if activos_activos and any(t in datos_portafolio for t in activos_activos):
     st.subheader("🌐 Rendimiento de Mis Acciones Compradas (%)")
     fig_global_activos = go.Figure()
@@ -232,6 +262,9 @@ if activos_activos and any(t in datos_portafolio for t in activos_activos):
     st.plotly_chart(fig_global_activos, use_container_width=True)
     st.divider()
 
+# ==========================================
+# BLOQUE 11: DETALLE INDIVIDUAL DE PORTAFOLIO
+# ==========================================
 if activos_activos:
     st.subheader("📈 Detalle de mi Portafolio")
     columnas_grid = st.columns(3)
@@ -272,6 +305,9 @@ if activos_activos:
 
 st.divider()
 
+# ==========================================
+# BLOQUE 12: RADAR DE OPORTUNIDADES
+# ==========================================
 if activos_radar:
     st.subheader("🎯 Radar de Seguimiento y Oportunidades")
     col_tabla, col_grafico = st.columns([2, 3])
